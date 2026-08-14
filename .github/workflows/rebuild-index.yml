@@ -1,0 +1,55 @@
+name: Reconstruire l'index
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rebuild-index
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Générer index_v3.tsv
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/build_index.py
+
+      - name: Vérifier l'index produit
+        run: |
+          python3 - <<'PY'
+          import sys
+          with open("index_v3.tsv", encoding="utf-8") as fh:
+              lines = fh.read().splitlines()
+          # Une source tombée ne doit pas publier un index amputé.
+          if len(lines) < 30000:
+              sys.exit(f"index anormalement court : {len(lines)} lignes")
+          bad = [l for l in lines[:2000] if l.count("\t") != 5]
+          if bad:
+              sys.exit(f"colonnes inattendues : {bad[0]!r}")
+          print(f"OK — {len(lines)} lignes")
+          PY
+
+      - name: Publier si l'index a changé
+        run: |
+          if git diff --quiet -- index_v3.tsv index.json; then
+            echo "index inchangé"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index_v3.tsv index.json
+          git commit -m "index: reconstruction automatique"
+          git push
